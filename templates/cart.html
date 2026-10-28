@@ -1,0 +1,96 @@
+{% extends 'base.html' %}
+{% block title %}Your cart — SmartBite{% endblock %}
+{% block content %}
+<div class="page-title"><div class="eyebrow">READY WHEN YOU ARE</div><h1>Your cart<span class="dot">.</span></h1><p>Review your items, share your location if you want, and confirm your full delivery address.</p></div>
+{% if items %}
+<div class="two-col">
+  <div class="panel cart-items-panel">
+    {% for x in items %}
+    <div class="cart-row"><div class="cart-emoji">🍽️</div><div class="grow"><b>{{ x.item_name }}</b><span class="muted small">Qty {{ x.quantity }} · {{ x.price|money }} each</span></div><strong>{{ x.subtotal|money }}</strong><form method="post" action="{{ url_for('remove',item_id=x.item_id) }}"><button class="link-btn">Remove</button></form></div>
+    {% endfor %}
+  </div>
+  <form id="checkout-form" class="panel checkout-panel" method="post" action="{{ url_for('checkout') }}">
+    <div class="eyebrow">ORDER SUMMARY</div>
+    <div class="total-line"><span>Subtotal</span><strong>{{ total|money }}</strong></div><div class="total-line"><span>Delivery</span><strong>Included</strong></div><div class="total-line grand"><span>Total</span><strong>{{ total|money }}</strong></div>
+    <label for="delivery-address">Complete delivery address<textarea id="delivery-address" name="address" required maxlength="500" rows="3" placeholder="House/flat number, street, locality, city, state, PIN code">{{ session.get('address','') }}</textarea></label>
+    <input type="hidden" id="customer-latitude" name="latitude"><input type="hidden" id="customer-longitude" name="longitude">
+    <button class="btn btn-ghost full" type="button" id="use-gps">◎ Use my current location</button>
+    <p id="gps-status" class="muted small" role="status" aria-live="polite">GPS is optional. If you do not allow it, the address will be located using the map service.</p>
+    <p id="coverage-check" class="notice compact-notice" role="status" aria-live="polite">Delivery is available within {{ radius_km|default(20)|int }} km straight-line distance from the restaurant. This is not road distance.</p>
+    <button id="place-order" class="btn btn-primary full" type="submit">Place order · COD</button>
+    <p class="muted small">Cash on Delivery demo. Your GPS is only requested when you tap the location button. An address is still required.</p>
+  </form>
+</div>
+{% else %}
+<div class="empty panel"><div class="empty-icon">🛍️</div><h2>Your cart is taking a break</h2><p>Add something delicious from the menu to get started.</p><a class="btn btn-primary" href="{{ url_for('index') }}">Browse menu</a></div>
+{% endif %}
+{% endblock %}
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+  const form = document.getElementById('checkout-form');
+  if (!form) return;
+  const address = document.getElementById('delivery-address');
+  const latField = document.getElementById('customer-latitude');
+  const lonField = document.getElementById('customer-longitude');
+  const gpsStatus = document.getElementById('gps-status');
+  const coverage = document.getElementById('coverage-check');
+  const gpsButton = document.getElementById('use-gps');
+  const submitButton = document.getElementById('place-order');
+  let lastCheck = null;
+
+  async function checkLocation() {
+    const payload = latField.value && lonField.value
+      ? {address: address.value.trim(), lat: latField.value, lon: lonField.value}
+      : {address: address.value.trim()};
+    const response = await fetch('{{ url_for("api_geocode") }}', {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Could not check this location.');
+    lastCheck = data;
+    if (!data.within_delivery_radius) {
+      coverage.textContent = 'Outside the delivery area: ' + data.distance_km + ' km straight-line distance; limit is ' + data.radius_km + ' km.';
+      coverage.classList.add('error-note');
+    } else {
+      coverage.textContent = 'Location verified: ' + data.distance_km + ' km straight-line distance from restaurant (' + data.source + ').';
+      coverage.classList.remove('error-note');
+    }
+    return data;
+  }
+
+  gpsButton.addEventListener('click', function () {
+    if (!navigator.geolocation) { gpsStatus.textContent = 'This browser does not support GPS. Please enter your full address.'; return; }
+    gpsButton.disabled = true; gpsStatus.textContent = 'Waiting for location permission…';
+    navigator.geolocation.getCurrentPosition(async function (position) {
+      latField.value = position.coords.latitude.toFixed(7);
+      lonField.value = position.coords.longitude.toFixed(7);
+      gpsStatus.textContent = 'GPS location captured (accuracy about ' + Math.round(position.coords.accuracy) + ' m). Please check your address too.';
+      try { await checkLocation(); }
+      catch (error) { coverage.textContent = error.message; }
+      finally { gpsButton.disabled = false; }
+    }, function (error) {
+      latField.value = ''; lonField.value = '';
+      gpsStatus.textContent = 'GPS unavailable or permission denied (' + error.message + '). You can continue with your full address.';
+      gpsButton.disabled = false;
+    }, {enableHighAccuracy: true, timeout: 15000, maximumAge: 30000});
+  });
+
+  address.addEventListener('input', function () { lastCheck = null; });
+  form.addEventListener('submit', async function (event) {
+    event.preventDefault();
+    if (!address.value.trim()) { coverage.textContent = 'Enter your complete delivery address.'; address.focus(); return; }
+    submitButton.disabled = true; submitButton.textContent = 'Checking delivery area…';
+    try {
+      const result = await checkLocation();
+      if (!result.within_delivery_radius) return;
+      form.submit();
+    } catch (error) {
+      coverage.textContent = error.message + ' Check the address or internet connection and try again.';
+    } finally {
+      submitButton.disabled = false; submitButton.textContent = 'Place order · COD';
+    }
+  });
+});
+</script>
+{% endblock %}

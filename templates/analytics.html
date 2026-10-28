@@ -1,0 +1,70 @@
+{% extends 'base.html' %}
+{% block title %}Route analytics — SmartBite{% endblock %}
+{% block content %}
+<div class="page-title"><div class="eyebrow">DESIGN & ANALYSIS OF ALGORITHMS</div><h1>Dynamic route intelligence<span class="dot">.</span></h1><p>Current restaurant and active order coordinates are loaded from Oracle. New orders with GPS/address coordinates update this graph automatically.</p></div>
+<section class="panel custom-location-panel">
+  <div class="section-head"><div><div class="eyebrow">DYNAMIC GRAPH INPUT</div><h2>Add a temporary location</h2><p>Enter coordinates manually or use this device's GPS. These test points are saved only in your admin session and do not alter Oracle orders.</p></div></div>
+  <form class="custom-location-form" method="post" action="{{ url_for('add_analytics_location') }}">
+    <label>Location name<input name="name" maxlength="50" required placeholder="e.g. Test Delivery Point"></label>
+    <label>Latitude<input id="graph-latitude" name="latitude" type="number" min="-90" max="90" step="any" required placeholder="30.749611"></label>
+    <label>Longitude<input id="graph-longitude" name="longitude" type="number" min="-180" max="180" step="any" required placeholder="76.629417"></label>
+    <button class="btn btn-ghost" type="button" id="graph-use-gps">Use current GPS</button>
+    <button class="btn btn-primary" type="submit">Add location to graph</button>
+  </form>
+  {% if custom_locations %}<div class="custom-location-list"><b>Temporary locations in this session</b><ul>{% for name,coords in custom_locations.items() %}<li>{{ name }} — {{ coords[0] }}, {{ coords[1] }}</li>{% endfor %}</ul><form method="post" action="{{ url_for('clear_analytics_locations') }}"><button class="btn btn-ghost btn-sm">Clear temporary locations</button></form></div>{% endif %}
+</section>
+<div class="algo-grid">
+  <section class="panel algo-card"><div class="algo-icon">↗</div><div class="eyebrow">ALGORITHM 01</div><h2>Dijkstra's shortest path</h2><p>Finds the lowest total edge weight between two selected nodes in the current delivery-location graph.</p>
+    {% if has_customer_locations %}
+    <form class="route-form" method="get"><label>Start location<select name="start">{% for n in node_names %}<option value="{{ n }}" {{ 'selected' if n==start else '' }}>{{ n }}</option>{% endfor %}</select></label><label>Destination<select name="end">{% for n in node_names %}<option value="{{ n }}" {{ 'selected' if n==end else '' }}>{{ n }}</option>{% endfor %}</select></label><button class="btn btn-primary full">Calculate shortest path</button></form>
+    {% if result %}<div class="result-box"><span class="muted small">TOTAL GRAPH WEIGHT</span><b>{{ result.distance }} km</b><p>{% for n in result.path %}<span class="path-chip">{{ n }}</span>{% if not loop.last %}<span class="path-arrow">→</span>{% endif %}{% endfor %}</p><small>Time complexity: {{ result.complexity }}</small></div>{% else %}<p class="muted">No path exists between those nodes.</p>{% endif %}
+    {% else %}<div class="notice compact-notice">No active order has a saved delivery coordinate yet. Place a test order with GPS enabled or run an order with a geocoded address to populate the graph.</div>{% endif %}
+  </section>
+  <section class="panel algo-card"><div class="algo-icon">⌘</div><div class="eyebrow">ALGORITHM 02</div><h2>Prim's minimum spanning tree</h2><p>Connects the currently available graph nodes with minimum total edge weight. It is not a shortest route between two points.</p><div class="result-box"><span class="muted small">MST / FOREST TOTAL WEIGHT</span><b>{{ mst.total }} km</b><p>{{ mst.edges|length }} selected edges{% if not mst.connected %} · disconnected graph{% endif %}</p><small>Time complexity: {{ mst.complexity }}</small></div>
+    {% if mst.edges %}<div class="mst-list">{% for e in mst.edges %}<div><span>{{ e['from'] }} <b>↔</b> {{ e['to'] }}</span><strong>{{ e.distance }} km</strong></div>{% endfor %}</div>{% else %}<p class="muted small">Add active delivery locations to create an MST with multiple nodes.</p>{% endif %}
+  </section>
+</div>
+<section class="panel map-panel"><div class="section-head"><div><div class="eyebrow">CURRENT DELIVERY LOCATIONS</div><h2>Live location graph<span class="dot">.</span></h2><p>Orange: Dijkstra path · Green: Prim MST · Grey: available graph edges.</p></div><span class="pill">{{ nodes|length }} nodes</span></div><div id="route-map"></div><div class="map-legend"><span><i class="legend-dot"></i> Restaurant/customer location</span><span><i class="legend-line"></i> MST connection</span><span>Green circle: {{ radius_km|int }} km delivery limit</span></div></section>
+<div class="notice"><b>Distance source:</b> {{ weight_source }}. When OSRM's road-distance table is available, Dijkstra and Prim use road-distance edge weights. If it is unavailable, the graph falls back to straight-line Haversine distances. The map's connecting lines visualize graph edges; the delivery desk separately requests road geometry and ETA. Public OSRM estimates do not account for live traffic.</div>
+{% endblock %}
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+  const gpsButton = document.getElementById('graph-use-gps');
+  if (gpsButton) gpsButton.addEventListener('click', function () {
+    if (!navigator.geolocation) { alert('This browser does not support GPS.'); return; }
+    gpsButton.disabled = true; gpsButton.textContent = 'Getting location…';
+    navigator.geolocation.getCurrentPosition(function (position) {
+      document.getElementById('graph-latitude').value = position.coords.latitude.toFixed(7);
+      document.getElementById('graph-longitude').value = position.coords.longitude.toFixed(7);
+      gpsButton.disabled = false; gpsButton.textContent = 'Use current GPS';
+    }, function (error) {
+      alert('Could not read GPS location: ' + error.message);
+      gpsButton.disabled = false; gpsButton.textContent = 'Use current GPS';
+    }, {enableHighAccuracy:true, timeout:15000, maximumAge:30000});
+  });
+  const el = document.getElementById('route-map');
+  if (!el || typeof L === 'undefined') { if (el) el.innerHTML='<p class="map-fallback">Map library did not load. Check internet access and refresh.</p>'; return; }
+  const nodes = {{ nodes|tojson }};
+  const edges = {{ edges|tojson }};
+  const path = {{ (result.path if result else [])|tojson }};
+  const mstEdges = {{ mst.edges|tojson }};
+  const restaurant = [{{ restaurant_lat }}, {{ restaurant_lon }}];
+  const map = L.map(el).setView(restaurant, 12);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom:19, attribution:'&copy; OpenStreetMap contributors'}).addTo(map);
+  L.circle(restaurant, {radius:{{ radius_km }}*1000, color:'#0f8b62', weight:2, fillColor:'#8fd6b3', fillOpacity:.12}).addTo(map).bindPopup('Restaurant delivery coverage: {{ radius_km|int }} km radius');
+  const positions = {};
+  nodes.forEach(node => {
+    positions[node.id] = [node.lat, node.lon];
+    const marker = L.marker(positions[node.id]).addTo(map);
+    marker.bindPopup(document.createTextNode(node.label));
+  });
+  edges.forEach(edge => { if (positions[edge.from] && positions[edge.to]) L.polyline([positions[edge.from],positions[edge.to]], {color:'#c7d2ca',weight:2,dashArray:'5 7'}).addTo(map); });
+  mstEdges.forEach(edge => { if (positions[edge.from] && positions[edge.to]) L.polyline([positions[edge.from],positions[edge.to]], {color:'#0f8b62',weight:4,opacity:.8}).addTo(map); });
+  if (path.length > 1) L.polyline(path.map(name => positions[name]).filter(Boolean), {color:'#f08a45',weight:5}).addTo(map);
+  const bounds = nodes.map(node => [node.lat,node.lon]);
+  if (bounds.length) map.fitBounds(bounds.length === 1 ? [bounds[0],bounds[0]] : bounds, {padding:[30,30], maxZoom:14});
+  setTimeout(() => map.invalidateSize(), 150);
+});
+</script>
+{% endblock %}

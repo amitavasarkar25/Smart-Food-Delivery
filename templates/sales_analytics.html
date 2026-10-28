@@ -1,0 +1,46 @@
+{% extends 'base.html' %}
+{% block title %}Sales analytics — SmartBite{% endblock %}
+{% block content %}
+<div class="page-title"><div class="eyebrow">ADMIN · DATA ANALYTICS</div><h1>Sales & order analytics<span class="dot">.</span></h1><p>Oracle order records processed with Pandas DataFrames/Series, NumPy statistics, and Matplotlib charts.</p></div>
+
+<div class="stats-grid">
+  <div class="stat-card"><span>Total orders</span><b>{{ summary.total_orders }}</b><small>Includes all order statuses</small></div>
+  <div class="stat-card"><span>Revenue</span><b>{{ summary.total_revenue|money }}</b><small>Cancelled orders excluded</small></div>
+  <div class="stat-card"><span>Average order value</span><b>{{ summary.average_order_value|money }}</b><small>Non-cancelled orders</small></div>
+  <div class="stat-card"><span>Sales standard deviation</span><b>{{ summary.sales_stddev|money }}</b><small>NumPy summary statistic</small></div>
+</div>
+
+<div class="chart-grid">
+  <section class="panel chart-card">
+    <div class="eyebrow">REVENUE OVER TIME</div>
+    <h2>Daily sales</h2>
+    <div class="chart-canvas">
+      <img src="{{ url_for('static', filename='charts/' ~ charts.daily) }}"
+           alt="Matplotlib bar chart showing daily sales"
+           loading="lazy" style="display:block;width:100%;height:auto;max-height:420px;object-fit:contain;">
+    </div>
+  </section>
+
+  <section class="panel chart-card">
+    <div class="eyebrow">ORDER MIX</div>
+    <h2>Orders by status</h2>
+    <div class="chart-canvas">
+      <img src="{{ url_for('static', filename='charts/' ~ charts.status) }}"
+           alt="Matplotlib pie chart showing orders by status"
+           loading="lazy" style="display:block;width:100%;height:auto;max-height:420px;object-fit:contain;">
+    </div>
+  </section>
+
+  <section class="panel chart-card chart-wide">
+    <div class="eyebrow">MONTHLY PERFORMANCE</div>
+    <h2>Monthly sales</h2>
+    <div class="chart-canvas">
+      <img src="{{ url_for('static', filename='charts/' ~ charts.monthly) }}"
+           alt="Matplotlib line chart showing monthly sales"
+           loading="lazy" style="display:block;width:100%;height:auto;max-height:420px;object-fit:contain;">
+    </div>
+  </section>
+</div>
+
+<p class="muted small analytics-note">{{ summary.message }} Charts are generated with Matplotlib from the data currently stored in Oracle. If there are no orders yet, the charts show that data is unavailable rather than inventing values.</p>
+{% endblock %}

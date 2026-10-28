@@ -1,0 +1,83 @@
+{% extends 'base.html' %}
+{% block title %}My orders — SmartBite{% endblock %}
+{% block content %}
+<div class="page-title"><div class="eyebrow">YOUR FOOD JOURNEY</div><h1>My orders<span class="dot">.</span></h1><p>See your order status, delivery address and rider location when live tracking is available.</p></div>
+<div class="order-list">
+{% for o in orders %}
+<article class="panel order-card tracking-order" data-order-id="{{ o.order_id }}" data-status="{{ o.order_status }}" data-address="{{ o.delivery_address|e }}" data-lat="{{ o.delivery_latitude if o.delivery_latitude is not none else '' }}" data-lon="{{ o.delivery_longitude if o.delivery_longitude is not none else '' }}">
+  <div class="order-card-head"><div><span class="pill">ORDER #{{ o.order_id }}</span><h3>{{ o.order_status|replace('_',' ') }}</h3><p class="muted">{{ o.order_date }} · {{ o.delivery_address }}</p></div><strong class="order-price">{{ o.total_amount|money }}</strong></div>
+  {% if o.order_status not in ['DELIVERED','CANCELLED'] %}
+  <div class="tracking-map" id="order-map-{{ o.order_id }}" aria-label="Map for order {{ o.order_id }}"></div>
+  <p class="muted small" id="tracking-status-{{ o.order_id }}" role="status" aria-live="polite">Loading delivery map… Rider tracking appears after the assigned partner starts GPS sharing.</p>
+  {% else %}<p class="muted small">This order is {{ o.order_status|lower|replace('_',' ') }}. Live tracking is no longer active.</p>{% endif %}
+</article>
+{% else %}
+<div class="empty panel"><h2>No orders yet</h2><p>Your next favourite meal is waiting.</p><a class="btn btn-primary" href="{{ url_for('index') }}">Explore menu</a></div>
+{% endfor %}
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+  const restaurant = {lat: {{ restaurant_lat }}, lon: {{ restaurant_lon }}};
+  const radiusKm = {{ radius_km }};
+  const activeCards = Array.from(document.querySelectorAll('.tracking-order:not([data-status="DELIVERED"]):not([data-status="CANCELLED"])'));
+  if (!activeCards.length) return;
+  if (typeof L === 'undefined') {
+    activeCards.forEach(card => { const el=document.getElementById('tracking-status-'+card.dataset.orderId); if(el)el.textContent='Map library did not load. Check internet access and refresh.'; });
+    return;
+  }
+  activeCards.forEach(card => {
+    const id = card.dataset.orderId;
+    const mapEl = document.getElementById('order-map-' + id);
+    const statusEl = document.getElementById('tracking-status-' + id);
+    const map = L.map(mapEl).setView([restaurant.lat, restaurant.lon], 12);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom:19, attribution:'&copy; OpenStreetMap contributors'}).addTo(map);
+    L.circle([restaurant.lat, restaurant.lon], {radius:radiusKm*1000,color:'#0f8b62',fillOpacity:.07}).addTo(map);
+    L.marker([restaurant.lat, restaurant.lon]).addTo(map).bindPopup('Restaurant');
+    let customerPoint = null, riderMarker = null, routeLayer = null, polling = false, lastRouteAt = 0;
+    const setStatus = message => { statusEl.textContent = message; };
+    async function loadCustomer() {
+      const lat = Number(card.dataset.lat), lon = Number(card.dataset.lon);
+      if (card.dataset.lat !== '' && card.dataset.lon !== '' && Number.isFinite(lat) && Number.isFinite(lon)) {
+        customerPoint = {lat, lon};
+      } else {
+        const response = await fetch('{{ url_for("api_geocode") }}', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({address:card.dataset.address})});
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || 'Customer address could not be located.');
+        customerPoint = {lat:data.lat, lon:data.lon};
+      }
+      L.marker([customerPoint.lat, customerPoint.lon]).addTo(map).bindPopup('Delivery address');
+      map.fitBounds([[restaurant.lat,restaurant.lon],[customerPoint.lat,customerPoint.lon]],{padding:[25,25]});
+    }
+    async function pollRider() {
+      if (polling) return; polling = true;
+      try {
+        const response = await fetch('/api/location/' + encodeURIComponent(id), {cache:'no-store'});
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || 'Could not load rider location.');
+        if (!data.available) { setStatus('Map loaded. Rider GPS has not been shared yet.'); return; }
+        const point = [Number(data.latitude), Number(data.longitude)];
+        if (!Number.isFinite(point[0]) || !Number.isFinite(point[1])) { setStatus('Rider location data is invalid.'); return; }
+        if (!riderMarker) riderMarker = L.marker(point).addTo(map).bindPopup('Delivery partner — latest GPS'); else riderMarker.setLatLng(point);
+        setStatus('Rider location updated: ' + (data.updated_at || 'latest available GPS') + '.');
+        if (customerPoint && Date.now() - lastRouteAt > 60000) {
+          lastRouteAt = Date.now();
+          const target = data.order_status === 'OUT_FOR_DELIVERY' ? customerPoint : restaurant;
+          const response2 = await fetch('{{ url_for("api_route_estimate") }}', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({from_lat:point[0],from_lon:point[1],to_lat:target.lat,to_lon:target.lon})});
+          const route = await response2.json();
+          if (response2.ok && route.geometry) {
+            if (routeLayer) map.removeLayer(routeLayer);
+            routeLayer = L.geoJSON(route.geometry,{style:{color:'#f08a45',weight:4,opacity:.9}}).addTo(map);
+            setStatus('Rider GPS updated. Road route estimate: ' + route.distance_km + ' km, about ' + route.duration_minutes + ' min. Traffic may differ.');
+          }
+        }
+      } catch (error) { setStatus(error.message); }
+      finally { polling = false; }
+    }
+    loadCustomer().then(() => { setTimeout(() => map.invalidateSize(), 100); pollRider(); setInterval(pollRider, 15000); })
+      .catch(error => setStatus(error.message));
+  });
+});
+</script>
+{% endblock %}
